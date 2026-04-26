@@ -1,65 +1,115 @@
 import streamlit as st
 from openai import OpenAI
+import sqlite3
+import pandas as pd
+from datetime import datetime
 
-# This pulls the key from the TOML secrets you just pasted
-try:
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-except Exception as e:
-    st.error("API Key not found in Streamlit Secrets!")
-# Configuration
-st.set_page_config(page_title="ImpactLog AI", layout="wide")
+# --- 1. DATABASE LOGIC (Persistence Layer) ---
+def init_db():
+    conn = sqlite3.connect("worklog_vault.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_input TEXT,
+            transformed_output TEXT,
+            timestamp DATETIME
+        )
+    """)
+    conn.commit()
+    return conn
+
+def save_to_db(conn, raw, transformed):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO logs (raw_input, transformed_output, timestamp) VALUES (?, ?, ?)",
+        (raw, transformed, datetime.now())
+    )
+    conn.commit()
+
+# --- 2. AI LOGIC (Processing Layer) ---
+def transform_worklog(client, text):
+    try:
+        prompt = f"""
+        Act as a professional career coach. Transform the following messy work notes 
+        into a structured achievement report using the STAR method (Situation, Task, Action, Result).
+        
+        NOTES: {text}
+        
+        FORMAT:
+        ### 🚀 Professional Summary
+        [Write a high-level summary here]
+        
+        ### 📊 Key Achievements (STAR)
+        [List points here]
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": "You are a professional technical writer."},
+                      {"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"AI Transformation Error: {str(e)}"
+
+# --- 3. UI SETUP (Presentation Layer) ---
+st.set_page_config(page_title="ImpactLog AI", page_icon="📝", layout="wide")
+
+# Initialize Database
 db_conn = init_db()
 
-# Security: Pulling the API Key from Streamlit Secrets (Global)
-# Or from Sidebar for Local testing
-api_key = st.sidebar.text_input("OpenAI API Key", type="password")
-if not api_key:
+# Sidebar - API Configuration & History
+with st.sidebar:
+    st.title("⚙️ Settings")
+    # Priority: 1. TOML Secrets (Cloud) | 2. User Input (Local Test)
     api_key = st.secrets.get("OPENAI_API_KEY", "")
+    if not api_key:
+        api_key = st.text_input("Enter OpenAI API Key:", type="password")
+    
+    st.divider()
+    st.subheader("📜 Recent History")
+    history_df = pd.read_sql_query("SELECT timestamp, raw_input FROM logs ORDER BY id DESC LIMIT 5", db_conn)
+    st.table(history_df)
 
-st.title("🚀 Worklog to Performance Quantifier")
-st.info("M.Tech Project: Agentic Workflow for Career Achievement Transformation")
+# Main Interface
+st.title("👨‍💻 M.Tech Project: Global Worklog Generator")
+st.markdown("---")
 
-# Layout
-col1, col2 = st.columns([1, 1])
+col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("📝 Input Daily Logs")
-    user_input = st.text_area("What did you achieve today?", height=200, 
-                             placeholder="e.g., optimized the sql queries and met the client")
+    st.subheader("📥 Step 1: Input Daily Activity")
+    raw_text = st.text_area("What did you work on today?", height=250, 
+                            placeholder="e.g., fixed the css bug and had a sync meeting with the dev team")
     
-    if st.button("💾 Save & Transform"):
-        if user_input and api_key:
-            # 1. Save locally (Persistence)
-            save_log(db_conn, user_input)
-            
-            # 2. Transform via AI (Logic)
-            client = OpenAI(api_key=api_key)
-            with st.spinner("Analyzing impact..."):
-                prompt = f"""
-                Transform these notes into professional achievements using the STAR method:
-                NOTES: {user_input}
-                
-                Format as:
-                - Weekly Summary
-                - Professional Self-Appraisal (STAR Method)
-                - LinkedIn 'Friday Win' Post
-                """
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                st.session_state['result'] = response.choices[0].message.content
-        else:
-            st.error("Missing Input or API Key!")
+    generate_btn = st.button("Generate & Save Report", use_container_width=True)
 
 with col2:
-    st.subheader("✨ Professional Output")
-    if 'result' in st.session_state:
-        st.markdown(st.session_state['result'])
-        st.download_button("Export Report", st.session_state['result'], file_name="Achievement_Report.md")
+    st.subheader("📤 Step 2: Professional Output")
+    
+    if generate_btn:
+        if not api_key:
+            st.error("Please provide an API Key in the sidebar or secrets.toml")
+        elif not raw_text.strip():
+            st.warning("Please enter some work notes first.")
+        else:
+            with st.spinner("AI is analyzing your impact..."):
+                # Initialize Client
+                client = OpenAI(api_key=api_key)
+                
+                # Process
+                output = transform_worklog(client, raw_text)
+                
+                # Save to Local SQLite
+                save_to_db(db_conn, raw_text, output)
+                
+                # Display
+                st.markdown(output)
+                st.download_button("Download Report (.md)", output, file_name=f"Worklog_{datetime.now().strftime('%Y%m%d')}.md")
+    else:
+        st.info("Your professionally formatted report will appear here.")
 
-# Research Data Section
+# Footer
 st.divider()
-st.subheader("📊 Data Persistence History (Offline/Local Storage)")
-history = get_history(db_conn)
-st.dataframe(history, use_container_width=True)
+st.caption("Built for M.Tech Final Project Submission | Powered by GPT-4o-mini & Streamlit Cloud")
