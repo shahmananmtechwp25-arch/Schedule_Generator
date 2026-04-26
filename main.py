@@ -1,8 +1,11 @@
-from openai import OpenAI
 import streamlit as st
+from openai import OpenAI
 
-# Accessing the TOML secret
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# This pulls the key from the TOML secrets you just pasted
+try:
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+except Exception as e:
+    st.error("API Key not found in Streamlit Secrets!")
 # Configuration
 st.set_page_config(page_title="ImpactLog AI", layout="wide")
 db_conn = init_db()
